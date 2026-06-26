@@ -1,0 +1,9 @@
+{"type":"user","isSidechain":false,"sessionId":"sess-1","timestamp":"2026-06-26T12:00:00.000Z","message":{"role":"user","content":"First prompt: build a thing\nwith two lines"}}
+{"type":"assistant","sessionId":"sess-1","timestamp":"2026-06-26T12:00:01.000Z","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":10,"cache_read_input_tokens":5}}}
+{"type":"assistant","sessionId":"sess-1","timestamp":"2026-06-26T12:00:02.000Z","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":200,"output_tokens":80,"cache_creation_input_tokens":0,"cache_read_input_tokens":20}}}
+{"type":"user","isSidechain":false,"sessionId":"sess-1","timestamp":"2026-06-26T12:05:00.000Z","message":{"role":"user","content":[{"type":"tool_result","content":"ignored tool output"}]}}
+{"type":"user","isSidechain":false,"sessionId":"sess-1","timestamp":"2026-06-26T12:06:00.000Z","message":{"role":"user","content":"Second prompt"}}
+{"type":"assistant","sessionId":"sess-1","timestamp":"2026-06-26T12:06:01.000Z","message":{"role":"assistant","model":"claude-sonnet-4-6","usage":{"input_tokens":300,"output_tokens":100,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}
+{"type":"user","isSidechain":true,"sessionId":"sess-1","timestamp":"2026-06-26T12:07:00.000Z","message":{"role":"user","content":"sidechain prompt should be skipped"}}
+{"type":"user","isSidechain":false,"sessionId":"sess-1","timestamp":"2026-06-26T12:08:00.000Z","message":{"role":"user","content":"need textual>=1.1.3 and [E13 OK] done [user@host ~]$"}}
+{"type":"assistant","sessionId":"sess-1","timestamp":"2026-06-26T12:08:01.000Z","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}

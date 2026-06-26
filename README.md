@@ -1,0 +1,140 @@
+# claude-gists
+
+A terminal UI for browsing **recent Claude prompts and their token consumption**
+from your local Claude Code history.
+
+It reads the session transcripts Claude Code writes to
+`~/.claude/projects/<project>/*.jsonl`, pairs each typed prompt with the token
+usage of the response it triggered, and presents a scrollable, drill-in table.
+
+```
+┌ Claude Prompt Gists ───────────────────────────────────────────────────────────┐
+│ Time         Project      Tokens  In     Out    CacheW  CacheR  Model      Gist  │
+│ 06-26 14:02  token_optim  21.7k   605    22.5k  3.1k    820.9k  opus-4-8   Scaf… │
+│ 06-26 13:40  tbench       8.2k    1.2k   3.4k   0       18.2k   sonnet-4-6 Fix … │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+Columns: **Tokens** (grand total) · **In** (input) · **Out** (output) ·
+**CacheW** (cache-creation) · **CacheR** (cache-read).
+
+## Install / run
+
+This project uses [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv run claude-gists            # launch the TUI
+uv run claude-gists --group    # start grouped by project (toggle with 'g')
+uv run claude-gists --list     # plain-text dump (no TUI)
+uv run claude-gists --limit 50 --project tbench
+```
+
+Or install the console script:
+
+```bash
+uv pip install -e .
+claude-gists
+```
+
+## Options
+
+| Flag | Description |
+|------|-------------|
+| `--limit N` | Max recent prompts to show (default 200). |
+| `--project SUBSTR` | Filter to projects whose label contains `SUBSTR`. |
+| `--group` | Start grouped by project (also works with `--list`). |
+| `--dir PATH` | Override the transcripts dir (default `~/.claude/projects`). |
+| `--list` | Print a plain table instead of launching the TUI. |
+
+Set `CLAUDE_CONFIG_DIR` to point at a non-default Claude config location.
+
+## TUI keys
+
+| Key | Action |
+|-----|--------|
+| `↑`/`↓` or `j`/`k` | Move selection |
+| `g` | Toggle grouping by project |
+| `space` or `enter` | Fold/unfold the project at the cursor (grouped view) |
+| `z` | Fold all projects / unfold all |
+| `r` | Reload from disk |
+| `q` | Quit |
+
+In grouped view, each project shows a header row (`▼` expanded / `▶` folded)
+with its total tokens and prompt count; prompts are listed (indented)
+underneath. Fold a project to hide its prompts and keep just the header — handy
+for scanning token totals across many projects. Highlighting a project header
+shows that project's aggregate token breakdown, prompt count, average
+tokens/prompt, and active time range in the detail pane.
+
+The bottom pane shows the full prompt text and a token breakdown
+(input / output / cache-write / cache-read) for the highlighted row.
+
+## How tokens are attributed
+
+Each line of a session `.jsonl` is a JSON event. A typed prompt is a
+`type: "user"` event whose `message.content` is human text (tool results and
+sidechain/sub-agent turns are skipped). Every `type: "assistant"` event that
+follows — until the next typed prompt — contributes its `message.usage` block,
+which is summed into that prompt's cost.
+
+## Distribution
+
+The project ships three ways, covering both Python and non-Python users.
+
+### 1. PyPI — for anyone with Python (recommended)
+
+Once published, users run it with zero setup via `uvx`, or install it isolated
+with `pipx`:
+
+```bash
+uvx claude-gists              # run without a persistent install
+pipx install claude-gists     # install on PATH in its own venv
+```
+
+Maintainer steps (PyPI Trusted Publishing is wired up in CI):
+
+```bash
+make dist            # uv build -> dist/*.whl + *.tar.gz
+make publish-test    # upload to TestPyPI
+make publish         # upload to PyPI
+```
+
+### 2. Standalone binary — for users without Python
+
+A single self-contained executable (no Python/pip needed on the target):
+
+```bash
+make binary          # -> dist/claude-gists  (~13MB)
+./dist/claude-gists
+```
+
+Built with PyInstaller via `claude-gists.spec`.
+
+### 3. GitHub Releases — automated
+
+Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`, which publishes to
+PyPI and attaches Linux/macOS/Windows binaries to the GitHub Release:
+
+```bash
+git tag v0.1.0 && git push --tags
+```
+
+## Development
+
+```bash
+make install   # uv sync --extra dev --extra build
+make test      # uv run --extra dev pytest
+make run       # launch the TUI from source
+make help      # list all targets
+```
+
+Layout:
+
+```
+claude_gists/
+  models.py    # PromptGist, TokenUsage, formatting helpers
+  history.py   # transcript discovery + parsing
+  app.py       # Textual TUI
+  cli.py       # argparse entry point (claude-gists)
+tests/         # parser tests + fixture transcript
+```
