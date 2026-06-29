@@ -128,13 +128,61 @@ make run       # launch the TUI from source
 make help      # list all targets
 ```
 
+### Testing presentation and Textual
+
+The app uses a small MVVM split so display data can be tested without starting
+the terminal UI.
+
+Use `claude_gists.viewmodel.GistsViewModel` for presentation tests. It accepts
+ordinary `PromptGist` objects and returns inspectable row/detail dataclasses:
+
+```python
+from claude_gists.viewmodel import GistsViewModel
+
+view_model = GistsViewModel(gists, grouped=True, collapsed={"sample-project"})
+rows = view_model.table_rows()
+detail = view_model.detail_for_row(0)
+
+assert rows[0].kind == "header"
+assert rows[0].tokens == "880"
+assert detail.project == "sample-project"
+```
+
+This is the preferred place to assert exact formatted labels, token strings,
+group headers, collapsed state, and detail payloads.
+
+Use Textual's headless test harness for UI behavior. `App.run_test()` runs the
+TUI without taking over the terminal and provides a `pilot` for key presses:
+
+```python
+from textual.widgets import DataTable
+
+from claude_gists.app import GistsApp
+
+app = GistsApp(projects_dir=fixtures)
+async with app.run_test() as pilot:
+    await pilot.pause()
+    table = app.query_one("#table", DataTable)
+    assert table.row_count == 3
+
+    await pilot.press("g")
+    await pilot.pause()
+    assert table.row_count == 4
+```
+
+Use Textual tests for integration checks: key bindings, folding behavior,
+widget updates, cursor/highlight behavior, and render regressions. Avoid using
+them for every exact string when a ViewModel test can inspect the same
+presentation data more directly.
+
 Layout:
 
 ```
 claude_gists/
   models.py    # PromptGist, TokenUsage, formatting helpers
   history.py   # transcript discovery + parsing
+  viewmodel.py # display-ready rows/details, independent of Textual
   app.py       # Textual TUI
   cli.py       # argparse entry point (claude-gists)
-tests/         # parser tests + fixture transcript
+tests/         # parser, ViewModel, and Textual tests + fixture transcript
 ```

@@ -8,6 +8,7 @@ from pathlib import Path
 from . import __version__
 from .history import default_projects_dir, load_gists, summarize
 from .models import format_tokens, to_local
+from .viewmodel import group_by_project
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -60,9 +61,6 @@ def _print_list(projects_dir, project_filter, limit, grouped) -> int:
         return 0
 
     if grouped:
-        # Imported here so --list works without the textual dependency.
-        from .app import group_by_project
-
         for grp in group_by_project(gists):
             print(
                 f"\n▼ {grp.project}  "
