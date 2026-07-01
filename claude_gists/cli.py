@@ -8,7 +8,8 @@ from pathlib import Path
 from . import __version__
 from .history import default_projects_dir, load_gists, summarize
 from .models import format_tokens, to_local
-from .viewmodel import group_by_project
+from .pricing import estimate_cost_usd, format_cost
+from .viewmodel import group_by_project, pricing_models_by_project
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -60,28 +61,56 @@ def _print_list(projects_dir, project_filter, limit, grouped) -> int:
         print(f"No prompts found in {projects_dir or default_projects_dir()}")
         return 0
 
+    project_pricing_models = pricing_models_by_project(gists)
+
     if grouped:
         for grp in group_by_project(gists):
             print(
                 f"\n▼ {grp.project}  "
-                f"{format_tokens(grp.usage.total)}  ({grp.count} prompts)"
+                f"{format_tokens(grp.usage.total)}  "
+                f"{format_cost(grp.cost_usd)}  ({grp.count} prompts)"
             )
             for g in grp.gists:
                 ts = to_local(g.timestamp).strftime("%m-%d %H:%M")
+                cost = estimate_cost_usd(
+                    g.model,
+                    g.usage,
+                    fallback_model=project_pricing_models.get(g.project),
+                )
                 print(
                     f"  {ts}  {format_tokens(g.usage.total):>8}  "
+                    f"{format_cost(cost):>8}  "
                     f"{g.gist_preview(80)}"
                 )
     else:
         for g in gists:
             ts = to_local(g.timestamp).strftime("%m-%d %H:%M")
+            cost = estimate_cost_usd(
+                g.model,
+                g.usage,
+                fallback_model=project_pricing_models.get(g.project),
+            )
             print(
                 f"{ts}  {g.project[:18]:<18}  "
-                f"{format_tokens(g.usage.total):>8}  {g.gist_preview(80)}"
+                f"{format_tokens(g.usage.total):>8}  "
+                f"{format_cost(cost):>8}  "
+                f"{g.gist_preview(80)}"
             )
 
     total = summarize(gists)
-    print(f"\n{len(gists)} prompts · {format_tokens(total.total)} total tokens")
+    costs = [
+        estimate_cost_usd(
+            g.model,
+            g.usage,
+            fallback_model=project_pricing_models.get(g.project),
+        )
+        for g in gists
+    ]
+    total_cost = None if any(cost is None for cost in costs) else sum(costs)
+    print(
+        f"\n{len(gists)} prompts · {format_tokens(total.total)} total tokens "
+        f"· {format_cost(total_cost)} estimated API cost"
+    )
     return 0
 
 

@@ -1,7 +1,7 @@
 # claude-gists
 
-A terminal UI for browsing **recent Claude prompts and their token consumption**
-from your local Claude Code history.
+A terminal UI for browsing **recent Claude prompts, token consumption, and
+estimated API cost** from your local Claude Code history.
 
 It reads the session transcripts Claude Code writes to
 `~/.claude/projects/<project>/*.jsonl`, pairs each typed prompt with the token
@@ -9,14 +9,15 @@ usage of the response it triggered, and presents a scrollable, drill-in table.
 
 ```
 ┌ Claude Prompt Gists ───────────────────────────────────────────────────────────┐
-│ Time         Project      Tokens  In     Out    CacheW  CacheR  Model      Gist  │
-│ 06-26 14:02  token_optim  21.7k   605    22.5k  3.1k    820.9k  opus-4-8   Scaf… │
-│ 06-26 13:40  tbench       8.2k    1.2k   3.4k   0       18.2k   sonnet-4-6 Fix … │
+│ Time         Project      Tokens  Cost   In     Out    CacheW  CacheR  Model     Gist │
+│ 06-26 14:02  token_optim  21.7k   $0.19  605    22.5k  3.1k    820.9k  opus-4-8  Scaf…│
+│ 06-26 13:40  tbench       8.2k    $0.03  1.2k   3.4k   0       18.2k   sonnet…   Fix …│
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 Columns: **Tokens** (grand total) · **In** (input) · **Out** (output) ·
-**CacheW** (cache-creation) · **CacheR** (cache-read).
+**Cost** (estimated Claude API cost) · **CacheW** (cache-creation) ·
+**CacheR** (cache-read).
 
 ## Install / run
 
@@ -48,6 +49,39 @@ claude-gists
 
 Set `CLAUDE_CONFIG_DIR` to point at a non-default Claude config location.
 
+## User guide
+
+By default, `claude-gists` shows the latest 200 prompts from local Claude Code
+history. Grouped view groups only those loaded prompts, so projects outside the
+current limit will not appear. Increase the limit when you want a fuller
+project-level cost view:
+
+```bash
+uv run claude-gists --group --limit 100000
+```
+
+Filter to projects whose decoded path contains a keyword with `--project`:
+
+```bash
+uv run claude-gists --project tbench
+uv run claude-gists --group --project game-1024
+uv run claude-gists --group --limit 100000 --project token
+```
+
+Use `--list` for a quick terminal report instead of the interactive TUI:
+
+```bash
+uv run claude-gists --list --group --limit 100000
+```
+
+Inside the TUI, press `g` to switch between flat and grouped views. In grouped
+view, `space`/`enter` folds or unfolds the highlighted project, `f` folds all
+projects, and `z` toggles fold all / unfold all.
+
+`make run` launches the default TUI (`uv run claude-gists`). It does not
+currently pass extra CLI arguments, so use `uv run claude-gists ...` directly
+when you need `--group`, `--limit`, `--project`, or `--list`.
+
 ## TUI keys
 
 | Key | Action |
@@ -55,6 +89,7 @@ Set `CLAUDE_CONFIG_DIR` to point at a non-default Claude config location.
 | `↑`/`↓` or `j`/`k` | Move selection |
 | `g` | Toggle grouping by project |
 | `space` or `enter` | Fold/unfold the project at the cursor (grouped view) |
+| `f` | Fold all projects |
 | `z` | Fold all projects / unfold all |
 | `r` | Reload from disk |
 | `q` | Quit |
@@ -67,7 +102,8 @@ shows that project's aggregate token breakdown, prompt count, average
 tokens/prompt, and active time range in the detail pane.
 
 The bottom pane shows the full prompt text and a token breakdown
-(input / output / cache-write / cache-read) for the highlighted row.
+(input / output / cache-write / cache-read) plus estimated API cost for the
+highlighted row.
 
 ## How tokens are attributed
 
@@ -76,6 +112,24 @@ Each line of a session `.jsonl` is a JSON event. A typed prompt is a
 sidechain/sub-agent turns are skipped). Every `type: "assistant"` event that
 follows — until the next typed prompt — contributes its `message.usage` block,
 which is summed into that prompt's cost.
+
+## Cost estimation
+
+Cost is estimated from the public Claude API pricing at
+<https://claude.com/pricing#api>. The formula uses model-specific rates for
+uncached input, output, cache-write, and cache-read tokens:
+
+```text
+cost =
+  input_tokens * input_rate
++ output_tokens * output_rate
++ cache_creation_input_tokens * cache_write_5min_rate
++ cache_read_input_tokens * cache_read_rate
+```
+
+Rates are USD per million tokens. Claude Code local history records cache
+creation tokens but not the cache TTL, so cache writes are estimated with the
+5-minute prompt-cache write rate. Unknown model IDs display `—` for cost.
 
 ## Distribution
 
@@ -181,6 +235,7 @@ Layout:
 claude_gists/
   models.py    # PromptGist, TokenUsage, formatting helpers
   history.py   # transcript discovery + parsing
+  pricing.py   # Claude API token cost estimation
   viewmodel.py # display-ready rows/details, independent of Textual
   app.py       # Textual TUI
   cli.py       # argparse entry point (claude-gists)

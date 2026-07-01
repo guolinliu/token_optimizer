@@ -1,6 +1,8 @@
+from datetime import datetime, timezone
 from pathlib import Path
 
 from claude_gists.history import load_gists
+from claude_gists.models import PromptGist, TokenUsage
 from claude_gists.viewmodel import (
     EmptyDetailView,
     GistsViewModel,
@@ -21,6 +23,7 @@ def test_view_model_exposes_flat_rows_without_textual():
     assert [row.kind for row in rows] == ["gist", "gist", "gist"]
     assert rows[0].project == "sample-project"
     assert rows[0].tokens == "15"
+    assert rows[0].cost == "$0.0002"
     assert rows[0].model == "opus-4-8"
     assert rows[0].gist == "need textual>=1.1.3 and [E13 OK] done [user@host ~]$"
     assert view_model.subtitle == "3 prompts · 880 tokens · flat"
@@ -40,6 +43,7 @@ def test_view_model_exposes_grouped_and_collapsed_rows():
     assert rows[0].kind == "header"
     assert rows[0].project_label == "▶ sample-project"
     assert rows[0].tokens == "880"
+    assert rows[0].cost == "$0.0074"
     assert rows[0].gist == "3 prompts (folded)"
     assert view_model.project_at_row(0) == "sample-project"
 
@@ -54,6 +58,7 @@ def test_view_model_exposes_detail_payloads():
     assert prompt_detail.usage_line == (
         "  total=15  in=10  out=5  cache_w=0  cache_r=0"
     )
+    assert prompt_detail.cost_line == "  estimated=$0.0002"
     assert "[E13 OK]" in prompt_detail.text
 
     group_detail = GistsViewModel(gists, grouped=True).detail_for_row(0)
@@ -64,6 +69,36 @@ def test_view_model_exposes_detail_payloads():
     assert group_detail.usage_line == (
         "  total=880  in=610  out=235  cache_w=10  cache_r=25"
     )
+    assert group_detail.cost_line == "  estimated=$0.0074"
 
     empty_detail = GistsViewModel([]).detail_for_row(0)
     assert isinstance(empty_detail, EmptyDetailView)
+
+
+def test_unknown_model_cost_uses_project_pricing_model():
+    gists = [
+        PromptGist(
+            timestamp=datetime(2026, 6, 26, tzinfo=timezone.utc),
+            project="proj",
+            session_id="known",
+            text="known",
+            model="claude-sonnet-4-6",
+            usage=TokenUsage(input_tokens=1_000_000),
+        ),
+        PromptGist(
+            timestamp=datetime(2026, 6, 27, tzinfo=timezone.utc),
+            project="proj",
+            session_id="unknown",
+            text="unknown",
+            model="<synthetic>",
+            usage=TokenUsage(input_tokens=1_000_000),
+        ),
+    ]
+
+    rows = GistsViewModel(gists).table_rows()
+    assert rows[0].cost == "$3.00"
+    assert rows[1].cost == "$3.00"
+
+    group_detail = GistsViewModel(gists, grouped=True).detail_for_row(0)
+    assert isinstance(group_detail, GroupDetailView)
+    assert group_detail.cost_line == "  estimated=$6.00"

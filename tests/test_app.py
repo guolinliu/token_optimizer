@@ -95,6 +95,32 @@ def test_fold_all_toggles_every_group():
     asyncio.run(scenario())
 
 
+def test_fold_all_shortcut_collapses_groups():
+    from textual.widgets import DataTable
+
+    async def scenario() -> None:
+        app = GistsApp(projects_dir=FIXTURES)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("g")
+            await pilot.pause()
+            table = app.query_one("#table", DataTable)
+            assert table.row_count == 4
+
+            await pilot.press("f")
+            await pilot.pause()
+            assert table.row_count == 1
+            assert "sample-project" in app._collapsed
+
+            # Unlike z, f is a one-way fold-all shortcut.
+            await pilot.press("f")
+            await pilot.pause()
+            assert table.row_count == 1
+            assert "sample-project" in app._collapsed
+
+    asyncio.run(scenario())
+
+
 def test_render_detail_handles_bracket_text():
     """Highlighting a bracket-laden prompt renders literally, no MarkupError.
 

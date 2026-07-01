@@ -47,6 +47,7 @@ class GistsApp(App):
         Binding("r", "reload", "Reload"),
         Binding("g", "toggle_group", "Group by project"),
         Binding("space", "toggle_fold", "Fold group"),
+        Binding("f", "fold_all", "Fold all"),
         Binding("z", "toggle_all_folds", "Fold all"),
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
@@ -81,7 +82,7 @@ class GistsApp(App):
     def on_mount(self) -> None:
         table = self.query_one("#table", DataTable)
         table.add_columns(
-            "Time", "Project", "Tokens", "In", "Out",
+            "Time", "Project", "Tokens", "Cost", "In", "Out",
             "CacheW", "CacheR", "Model", "Gist",
         )
         self.action_reload()
@@ -124,6 +125,13 @@ class GistsApp(App):
             self._collapsed.clear()
         else:
             self._collapsed = projects
+        self._populate()
+
+    def action_fold_all(self) -> None:
+        """Collapse every project in grouped view."""
+        if not self._grouped:
+            return
+        self._collapsed = self._view_model().projects
         self._populate()
 
     def _project_at_cursor(self) -> str | None:
@@ -183,6 +191,7 @@ class GistsApp(App):
         if row.is_header:
             project = Text(row.project_label, style="bold")
             tokens = Text(row.tokens, style="bold")
+            cost = Text(row.cost, style="bold")
             input_tokens = Text(row.input_tokens, style="bold")
             output_tokens = Text(row.output_tokens, style="bold")
             cache_write_tokens = Text(row.cache_write_tokens, style="bold")
@@ -191,6 +200,7 @@ class GistsApp(App):
         else:
             project = Text(row.project_label)
             tokens = row.tokens
+            cost = row.cost
             input_tokens = row.input_tokens
             output_tokens = row.output_tokens
             cache_write_tokens = row.cache_write_tokens
@@ -201,6 +211,7 @@ class GistsApp(App):
             row.time,
             project,
             tokens,
+            cost,
             input_tokens,
             output_tokens,
             cache_write_tokens,
@@ -245,6 +256,8 @@ class GistsApp(App):
         body.append(f"  ·  session {view.session_id}\n")
         body.append("Tokens", style="bold")
         body.append(view.usage_line + "\n\n")
+        body.append("Cost", style="bold")
+        body.append(view.cost_line + "\n\n")
         body.append(view.text)
         return body
 
@@ -256,7 +269,9 @@ class GistsApp(App):
             body.append(f"  ·  {view.oldest} → {view.newest}")
         body.append(f"  ·  avg {view.average_tokens}/prompt\n")
         body.append("Tokens", style="bold")
-        body.append(view.usage_line)
+        body.append(view.usage_line + "\n")
+        body.append("Cost", style="bold")
+        body.append(view.cost_line)
         return body
 
 

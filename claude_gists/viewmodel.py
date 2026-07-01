@@ -7,11 +7,13 @@ can inspect or render.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Literal
 
 from .history import summarize
 from .models import PromptGist, TokenUsage, format_tokens, to_local
+from .pricing import estimate_cost_usd, format_cost, has_pricing
 
 
 RowKind = Literal["gist", "header"]
@@ -24,9 +26,20 @@ class ProjectGroup:
     project: str
     gists: list[PromptGist]
     usage: TokenUsage = field(init=False)
+    cost_usd: float | None = field(init=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "usage", summarize(self.gists))
+        fallback_model = project_pricing_model(self.gists)
+        costs = [
+            estimate_cost_usd(g.model, g.usage, fallback_model=fallback_model)
+            for g in self.gists
+        ]
+        object.__setattr__(
+            self,
+            "cost_usd",
+            None if any(cost is None for cost in costs) else sum(costs),
+        )
 
     @property
     def count(self) -> int:
@@ -42,6 +55,7 @@ class TableRowView:
     time: str
     project_label: str
     tokens: str
+    cost: str
     input_tokens: str
     output_tokens: str
     cache_write_tokens: str
@@ -60,6 +74,7 @@ class PromptDetailView:
     model: str
     session_id: str
     usage_line: str
+    cost_line: str
     text: str
 
 
@@ -72,6 +87,7 @@ class GroupDetailView:
     newest: str | None
     average_tokens: str
     usage_line: str
+    cost_line: str
 
 
 @dataclass(frozen=True)
@@ -116,6 +132,7 @@ class GistsViewModel:
         self.gists = gists
         self.grouped = grouped
         self.collapsed = collapsed or set()
+        self._project_pricing_models = pricing_models_by_project(gists)
 
     @property
     def subtitle(self) -> str:
@@ -133,7 +150,15 @@ class GistsViewModel:
     def table_rows(self) -> list[TableRowView]:
         if self.grouped:
             return self._grouped_rows()
-        return [self._gist_row(g, show_project=True, indent=False) for g in self.gists]
+        return [
+            self._gist_row(
+                g,
+                show_project=True,
+                indent=False,
+                fallback_model=self._project_pricing_models.get(g.project),
+            )
+            for g in self.gists
+        ]
 
     def project_at_row(self, row_index: int) -> str | None:
         rows = self.table_rows()
@@ -167,6 +192,7 @@ class GistsViewModel:
                     time="",
                     project_label=f"{marker} {short_project(group.project)}",
                     tokens=format_tokens(group.usage.total),
+                    cost=format_cost(group.cost_usd),
                     input_tokens=format_tokens(group.usage.input_tokens),
                     output_tokens=format_tokens(group.usage.output_tokens),
                     cache_write_tokens=format_tokens(
@@ -184,13 +210,23 @@ class GistsViewModel:
             if collapsed:
                 continue
             rows.extend(
-                self._gist_row(g, show_project=False, indent=True) for g in group.gists
+                self._gist_row(
+                    g,
+                    show_project=False,
+                    indent=True,
+                    fallback_model=self._project_pricing_models.get(g.project),
+                )
+                for g in group.gists
             )
         return rows
 
     @staticmethod
     def _gist_row(
-        g: PromptGist, *, show_project: bool, indent: bool
+        g: PromptGist,
+        *,
+        show_project: bool,
+        indent: bool,
+        fallback_model: str | None = None,
     ) -> TableRowView:
         gist = g.gist_preview(68)
         return TableRowView(
@@ -199,6 +235,9 @@ class GistsViewModel:
             time=to_local(g.timestamp).strftime("%m-%d %H:%M"),
             project_label=short_project(g.project) if show_project else "",
             tokens=format_tokens(g.usage.total),
+            cost=format_cost(
+                estimate_cost_usd(g.model, g.usage, fallback_model=fallback_model)
+            ),
             input_tokens=format_tokens(g.usage.input_tokens),
             output_tokens=format_tokens(g.usage.output_tokens),
             cache_write_tokens=format_tokens(g.usage.cache_creation_input_tokens),
@@ -208,8 +247,8 @@ class GistsViewModel:
             entry=g,
         )
 
-    @staticmethod
-    def _prompt_detail(g: PromptGist) -> PromptDetailView:
+    def _prompt_detail(self, g: PromptGist) -> PromptDetailView:
+        fallback_model = self._project_pricing_models.get(g.project)
         return PromptDetailView(
             kind="gist",
             when=to_local(g.timestamp).strftime("%Y-%m-%d %H:%M:%S"),
@@ -217,6 +256,7 @@ class GistsViewModel:
             model=g.model or "—",
             session_id=g.session_id[:8],
             usage_line=usage_line(g.usage),
+            cost_line=cost_line(g.model, g.usage, fallback_model=fallback_model),
             text=g.text,
         )
 
@@ -236,6 +276,7 @@ class GistsViewModel:
             newest=newest,
             average_tokens=format_tokens(avg),
             usage_line=usage_line(group.usage),
+            cost_line=f"  estimated={format_cost(group.cost_usd)}",
         )
 
 
@@ -247,3 +288,31 @@ def usage_line(usage: TokenUsage) -> str:
         f"cache_w={format_tokens(usage.cache_creation_input_tokens)}  "
         f"cache_r={format_tokens(usage.cache_read_input_tokens)}"
     )
+
+
+def project_pricing_model(gists: list[PromptGist]) -> str | None:
+    counts = Counter(g.model for g in gists if has_pricing(g.model))
+    if not counts:
+        return None
+    return counts.most_common(1)[0][0]
+
+
+def pricing_models_by_project(gists: list[PromptGist]) -> dict[str, str]:
+    buckets: dict[str, list[PromptGist]] = {}
+    for gist in gists:
+        buckets.setdefault(gist.project, []).append(gist)
+    return {
+        project: model
+        for project, project_gists in buckets.items()
+        if (model := project_pricing_model(project_gists)) is not None
+    }
+
+
+def cost_line(
+    model: str, usage: TokenUsage, *, fallback_model: str | None = None
+) -> str:
+    cost = estimate_cost_usd(model, usage, fallback_model=fallback_model)
+    suffix = ""
+    if cost is not None and fallback_model is not None and not has_pricing(model):
+        suffix = f" using {fallback_model}"
+    return f"  estimated={format_cost(cost)}{suffix}"
