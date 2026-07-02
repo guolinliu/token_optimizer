@@ -121,6 +121,30 @@ def test_fold_all_shortcut_collapses_groups():
     asyncio.run(scenario())
 
 
+def test_cost_sort_shortcut_toggles_sort_mode():
+    from textual.widgets import DataTable
+
+    async def scenario() -> None:
+        app = GistsApp(projects_dir=FIXTURES)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.query_one("#table", DataTable)
+            assert table.row_count == 3
+            assert app._sort_by_cost is False
+
+            await pilot.press("c")
+            await pilot.pause()
+            assert table.row_count == 3
+            assert app._sort_by_cost is True
+
+            await pilot.press("c")
+            await pilot.pause()
+            assert table.row_count == 3
+            assert app._sort_by_cost is False
+
+    asyncio.run(scenario())
+
+
 def test_render_detail_handles_bracket_text():
     """Highlighting a bracket-laden prompt renders literally, no MarkupError.
 

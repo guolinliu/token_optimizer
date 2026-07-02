@@ -19,6 +19,16 @@ Columns: **Tokens** (grand total) · **In** (input) · **Out** (output) ·
 **Cost** (estimated Claude API cost) · **CacheW** (cache-creation) ·
 **CacheR** (cache-read).
 
+## Screenshots
+
+Interactive grouped view:
+
+![claude-gists TUI grouped view](docs/claude-gists-tui.svg)
+
+Plain `--list --group` report:
+
+![claude-gists list output](docs/claude-gists-list.svg)
+
 ## Install / run
 
 This project uses [uv](https://docs.astral.sh/uv/).
@@ -74,9 +84,10 @@ Use `--list` for a quick terminal report instead of the interactive TUI:
 uv run claude-gists --list --group --limit 100000
 ```
 
-Inside the TUI, press `g` to switch between flat and grouped views. In grouped
-view, `space`/`enter` folds or unfolds the highlighted project, `f` folds all
-projects, and `z` toggles fold all / unfold all.
+Inside the TUI, press `g` to switch between flat and grouped views and `c` to
+toggle cost-descending order. In grouped view, `space`/`enter` folds or unfolds
+the highlighted project, `f` folds all projects, and `z` toggles fold all /
+unfold all.
 
 `make run` launches the default TUI (`uv run claude-gists`). It does not
 currently pass extra CLI arguments, so use `uv run claude-gists ...` directly
@@ -88,6 +99,7 @@ when you need `--group`, `--limit`, `--project`, or `--list`.
 |-----|--------|
 | `↑`/`↓` or `j`/`k` | Move selection |
 | `g` | Toggle grouping by project |
+| `c` | Toggle cost-descending order |
 | `space` or `enter` | Fold/unfold the project at the cursor (grouped view) |
 | `f` | Fold all projects |
 | `z` | Fold all projects / unfold all |

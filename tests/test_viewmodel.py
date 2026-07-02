@@ -102,3 +102,55 @@ def test_unknown_model_cost_uses_project_pricing_model():
     group_detail = GistsViewModel(gists, grouped=True).detail_for_row(0)
     assert isinstance(group_detail, GroupDetailView)
     assert group_detail.cost_line == "  estimated=$6.00"
+
+
+def test_view_model_sorts_prompts_by_cost_descending():
+    gists = [
+        PromptGist(
+            timestamp=datetime(2026, 6, 26, tzinfo=timezone.utc),
+            project="proj",
+            session_id="low",
+            text="low",
+            model="claude-sonnet-4-6",
+            usage=TokenUsage(input_tokens=1),
+        ),
+        PromptGist(
+            timestamp=datetime(2026, 6, 27, tzinfo=timezone.utc),
+            project="proj",
+            session_id="high",
+            text="high",
+            model="claude-opus-4-8",
+            usage=TokenUsage(output_tokens=1_000_000),
+        ),
+    ]
+
+    rows = GistsViewModel(gists, sort_by_cost=True).table_rows()
+    assert [row.gist for row in rows] == ["high", "low"]
+    assert GistsViewModel(gists, sort_by_cost=True).subtitle.endswith(
+        "flat · cost desc"
+    )
+
+
+def test_view_model_sorts_groups_by_cost_descending():
+    gists = [
+        PromptGist(
+            timestamp=datetime(2026, 6, 26, tzinfo=timezone.utc),
+            project="low",
+            session_id="low",
+            text="low",
+            model="claude-sonnet-4-6",
+            usage=TokenUsage(input_tokens=1),
+        ),
+        PromptGist(
+            timestamp=datetime(2026, 6, 27, tzinfo=timezone.utc),
+            project="high",
+            session_id="high",
+            text="high",
+            model="claude-opus-4-8",
+            usage=TokenUsage(output_tokens=1_000_000),
+        ),
+    ]
+
+    rows = GistsViewModel(gists, grouped=True, sort_by_cost=True).table_rows()
+    assert rows[0].kind == "header"
+    assert rows[0].project == "high"

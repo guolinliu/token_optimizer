@@ -128,19 +128,22 @@ class GistsViewModel:
         *,
         grouped: bool = False,
         collapsed: set[str] | None = None,
+        sort_by_cost: bool = False,
     ) -> None:
         self.gists = gists
         self.grouped = grouped
         self.collapsed = collapsed or set()
+        self.sort_by_cost = sort_by_cost
         self._project_pricing_models = pricing_models_by_project(gists)
 
     @property
     def subtitle(self) -> str:
         mode = "grouped" if self.grouped else "flat"
+        order = " · cost desc" if self.sort_by_cost else ""
         total = summarize(self.gists)
         return (
             f"{len(self.gists)} prompts · {format_tokens(total.total)} tokens "
-            f"· {mode}"
+            f"· {mode}{order}"
         )
 
     @property
@@ -150,6 +153,7 @@ class GistsViewModel:
     def table_rows(self) -> list[TableRowView]:
         if self.grouped:
             return self._grouped_rows()
+        gists = self._sort_gists_by_cost(self.gists) if self.sort_by_cost else self.gists
         return [
             self._gist_row(
                 g,
@@ -157,7 +161,7 @@ class GistsViewModel:
                 indent=False,
                 fallback_model=self._project_pricing_models.get(g.project),
             )
-            for g in self.gists
+            for g in gists
         ]
 
     def project_at_row(self, row_index: int) -> str | None:
@@ -181,7 +185,10 @@ class GistsViewModel:
 
     def _grouped_rows(self) -> list[TableRowView]:
         rows: list[TableRowView] = []
-        for group in group_by_project(self.gists):
+        groups = group_by_project(self.gists)
+        if self.sort_by_cost:
+            groups = sorted(groups, key=lambda group: cost_sort_key(group.cost_usd))
+        for group in groups:
             collapsed = group.project in self.collapsed
             marker = "▶" if collapsed else "▼"
             count = f"{group.count} prompts" + (" (folded)" if collapsed else "")
@@ -209,6 +216,11 @@ class GistsViewModel:
             )
             if collapsed:
                 continue
+            group_gists = (
+                self._sort_gists_by_cost(group.gists)
+                if self.sort_by_cost
+                else group.gists
+            )
             rows.extend(
                 self._gist_row(
                     g,
@@ -216,9 +228,21 @@ class GistsViewModel:
                     indent=True,
                     fallback_model=self._project_pricing_models.get(g.project),
                 )
-                for g in group.gists
+                for g in group_gists
             )
         return rows
+
+    def _sort_gists_by_cost(self, gists: list[PromptGist]) -> list[PromptGist]:
+        return sorted(
+            gists,
+            key=lambda g: cost_sort_key(
+                estimate_cost_usd(
+                    g.model,
+                    g.usage,
+                    fallback_model=self._project_pricing_models.get(g.project),
+                )
+            ),
+        )
 
     @staticmethod
     def _gist_row(
@@ -306,6 +330,12 @@ def pricing_models_by_project(gists: list[PromptGist]) -> dict[str, str]:
         for project, project_gists in buckets.items()
         if (model := project_pricing_model(project_gists)) is not None
     }
+
+
+def cost_sort_key(cost: float | None) -> tuple[int, float]:
+    if cost is None:
+        return (1, 0.0)
+    return (0, -cost)
 
 
 def cost_line(

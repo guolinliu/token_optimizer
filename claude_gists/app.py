@@ -46,6 +46,7 @@ class GistsApp(App):
         Binding("q", "quit", "Quit"),
         Binding("r", "reload", "Reload"),
         Binding("g", "toggle_group", "Group by project"),
+        Binding("c", "toggle_cost_sort", "Sort by cost"),
         Binding("space", "toggle_fold", "Fold group"),
         Binding("f", "fold_all", "Fold all"),
         Binding("z", "toggle_all_folds", "Fold all"),
@@ -66,6 +67,7 @@ class GistsApp(App):
         self._project_filter = project_filter
         self._limit = limit
         self._grouped = grouped
+        self._sort_by_cost = False
         self._gists: list[PromptGist] = []
         # Parallel to the visible table rows; maps a row to what it represents.
         self._rows: list[RowEntry] = []
@@ -101,6 +103,11 @@ class GistsApp(App):
     def action_toggle_group(self) -> None:
         """Flip between flat and grouped-by-project view (no disk reload)."""
         self._grouped = not self._grouped
+        self._populate()
+
+    def action_toggle_cost_sort(self) -> None:
+        """Toggle cost-descending ordering."""
+        self._sort_by_cost = not self._sort_by_cost
         self._populate()
 
     def action_toggle_fold(self) -> None:
@@ -159,6 +166,7 @@ class GistsApp(App):
             self._gists,
             grouped=self._grouped,
             collapsed=self._collapsed,
+            sort_by_cost=self._sort_by_cost,
         )
 
     def _populate(self, focus_project: str | None = None) -> None:
