@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from .history import summarize
-from .models import PromptGist, TokenUsage, format_tokens, to_local
+from .models import AssociatedEvent, PromptGist, TokenUsage, format_tokens, to_local
 from .pricing import estimate_cost_usd, format_cost, has_pricing
 
 
@@ -76,6 +76,10 @@ class PromptDetailView:
     usage_line: str
     cost_line: str
     text: str
+    event_type: str = ""
+    role: str = ""
+    message_id: str = ""
+    events: list[AssociatedEvent] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -129,11 +133,15 @@ class GistsViewModel:
         grouped: bool = False,
         collapsed: set[str] | None = None,
         sort_by_cost: bool = False,
+        since=None,
+        until=None,
     ) -> None:
         self.gists = gists
         self.grouped = grouped
         self.collapsed = collapsed or set()
         self.sort_by_cost = sort_by_cost
+        self.since = since
+        self.until = until
         self._project_pricing_models = pricing_models_by_project(gists)
 
     @property
@@ -141,10 +149,42 @@ class GistsViewModel:
         mode = "grouped" if self.grouped else "flat"
         order = " · cost desc" if self.sort_by_cost else ""
         total = summarize(self.gists)
+        period = self._format_period()
+        period_str = f" · {period}" if period else ""
         return (
             f"{len(self.gists)} prompts · {format_tokens(total.total)} tokens "
-            f"· {mode}{order}"
+            f"· {mode}{order}{period_str}"
         )
+
+    def _format_period(self) -> str | None:
+        if self.since is None and self.until is None:
+            if not self.gists:
+                return None
+            # Derive from actual gist timestamps
+            timestamps = [g.timestamp for g in self.gists]
+            start = min(timestamps)
+            end = max(timestamps)
+        else:
+            if self.gists:
+                timestamps = [g.timestamp for g in self.gists]
+                start = self.since or min(timestamps)
+                end = self.until or max(timestamps)
+            else:
+                start = self.since
+                end = self.until
+        parts = []
+        if start is not None:
+            parts.append(to_local(start).strftime("%Y-%m-%d"))
+        if end is not None:
+            if parts:
+                parts.append(to_local(end).strftime("%Y-%m-%d"))
+            else:
+                parts.append(f"until {to_local(end).strftime('%Y-%m-%d')}")
+        if not parts:
+            return None
+        if len(parts) == 1:
+            return parts[0] if self.since is None else f"since {parts[0]}"
+        return f"{parts[0]} → {parts[1]}"
 
     @property
     def projects(self) -> set[str]:
@@ -153,7 +193,9 @@ class GistsViewModel:
     def table_rows(self) -> list[TableRowView]:
         if self.grouped:
             return self._grouped_rows()
-        gists = self._sort_gists_by_cost(self.gists) if self.sort_by_cost else self.gists
+        gists = (
+            self._sort_gists_by_cost(self.gists) if self.sort_by_cost else self.gists
+        )
         return [
             self._gist_row(
                 g,
@@ -282,6 +324,10 @@ class GistsViewModel:
             usage_line=usage_line(g.usage),
             cost_line=cost_line(g.model, g.usage, fallback_model=fallback_model),
             text=g.text,
+            event_type=g.event_type,
+            role=g.role,
+            message_id=g.message_id,
+            events=g.events,
         )
 
     @staticmethod

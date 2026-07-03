@@ -7,7 +7,7 @@ from pathlib import Path
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.widgets import DataTable, Footer, Header, Static
 
 from .history import load_gists
@@ -31,10 +31,13 @@ class GistsApp(App):
     """List recent Claude prompts with their token cost; drill into details."""
 
     CSS = """
-    #detail {
+    #detail-container {
         height: 40%;
         border: round $accent;
         padding: 0 1;
+        background: $surface;
+    }
+    #detail {
         background: $surface;
     }
     #table {
@@ -59,14 +62,18 @@ class GistsApp(App):
         projects_dir: Path | None = None,
         *,
         project_filter: str | None = None,
-        limit: int | None = 200,
+        limit: int | None = None,
         grouped: bool = False,
+        since=None,
+        until=None,
     ) -> None:
         super().__init__()
         self._projects_dir = projects_dir
         self._project_filter = project_filter
         self._limit = limit
         self._grouped = grouped
+        self._since = since
+        self._until = until
         self._sort_by_cost = False
         self._gists: list[PromptGist] = []
         # Parallel to the visible table rows; maps a row to what it represents.
@@ -78,14 +85,23 @@ class GistsApp(App):
         yield Header(show_clock=True)
         with Vertical():
             yield DataTable(id="table", cursor_type="row", zebra_stripes=True)
-            yield Static(id="detail")
+            with VerticalScroll(id="detail-container"):
+                yield Static(id="detail")
         yield Footer()
 
     def on_mount(self) -> None:
         table = self.query_one("#table", DataTable)
         table.add_columns(
-            "Time", "Project", "Tokens", "Cost", "In", "Out",
-            "CacheW", "CacheR", "Model", "Gist",
+            "Time",
+            "Project",
+            "Tokens",
+            "Cost",
+            "In",
+            "Out",
+            "CacheW",
+            "CacheR",
+            "Model",
+            "Gist",
         )
         self.action_reload()
 
@@ -97,6 +113,8 @@ class GistsApp(App):
             self._projects_dir,
             project_filter=self._project_filter,
             limit=self._limit,
+            since=self._since,
+            until=self._until,
         )
         self._populate()
 
@@ -167,6 +185,8 @@ class GistsApp(App):
             grouped=self._grouped,
             collapsed=self._collapsed,
             sort_by_cost=self._sort_by_cost,
+            since=self._since,
+            until=self._until,
         )
 
     def _populate(self, focus_project: str | None = None) -> None:
@@ -231,9 +251,7 @@ class GistsApp(App):
 
     # ------------------------------------------------------------------ detail
 
-    def on_data_table_row_highlighted(
-        self, event: DataTable.RowHighlighted
-    ) -> None:
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         try:
             index = int(event.row_key.value) if event.row_key.value else 0
         except (TypeError, ValueError):
@@ -263,10 +281,22 @@ class GistsApp(App):
         body.append(view.model)
         body.append(f"  ·  session {view.session_id}\n")
         body.append("Tokens", style="bold")
-        body.append(view.usage_line + "\n\n")
+        body.append(view.usage_line + "\n")
         body.append("Cost", style="bold")
         body.append(view.cost_line + "\n\n")
-        body.append(view.text)
+
+        # Display each associated event with its type, role, message id, and content
+        for event in view.events:
+            if event.event_type:
+                body.append(event.event_type, style="bold")
+            if event.role:
+                body.append(f" ({event.role})", style="cyan")
+            if event.message_id:
+                body.append(f" [{event.message_id[:8]}]", style="dim")
+            if event.content:
+                body.append(f"  {event.content}")
+            body.append("\n")
+
         return body
 
     def _group_detail_text(self, view: GroupDetailView) -> Text:
@@ -287,12 +317,16 @@ def run(
     projects_dir: Path | None = None,
     *,
     project_filter: str | None = None,
-    limit: int | None = 200,
+    limit: int | None = None,
     grouped: bool = False,
+    since=None,
+    until=None,
 ) -> None:
     GistsApp(
         projects_dir,
         project_filter=project_filter,
         limit=limit,
         grouped=grouped,
+        since=since,
+        until=until,
     ).run()

@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Iterator
 
-from .models import PromptGist, TokenUsage
+from .models import AssociatedEvent, PromptGist, TokenUsage
 
 
 def default_projects_dir() -> Path:
@@ -71,15 +71,103 @@ def _extract_user_text(content) -> str | None:
 def _is_command_noise(text: str) -> bool:
     """Skip slash-command stdout / meta envelopes that aren't real prompts."""
     stripped = text.lstrip()
-    return stripped.startswith("<command-") or stripped.startswith(
-        "<local-command-"
-    ) or stripped.startswith("Caveat:")
+    return (
+        stripped.startswith("<command-")
+        or stripped.startswith("<local-command-")
+        or stripped.startswith("Caveat:")
+    )
+
+
+def _extract_event_content(event: dict, message: dict) -> str:
+    """Return a text preview of an event's content."""
+    etype = event.get("type", "")
+
+    # Try to get text from message.content
+    content = message.get("content")
+    text = _extract_user_text(content)
+    if text:
+        # Truncate long text
+        if len(text) > 200:
+            return text[:197] + "..."
+        return text
+
+    # For assistant events with no text content, show model info
+    if etype == "assistant":
+        model = message.get("model", "")
+        if model:
+            return f"[assistant: {model}]"
+        return "[assistant]"
+
+    # For user events with tool results (content is list without text blocks)
+    if etype == "user" and isinstance(content, list):
+        return "[tool result]"
+
+    # For other events, show type and maybe a summary
+    if etype == "attachment":
+        attachment = event.get("attachment", {})
+        if isinstance(attachment, dict):
+            atype = attachment.get("type", "")
+            if atype:
+                return f"[attachment: {atype}]"
+        return "[attachment]"
+
+    if etype:
+        return f"[{etype}]"
+
+    return ""
+
+
+def _make_associated_event(event: dict) -> AssociatedEvent:
+    """Create an AssociatedEvent from a raw event dict."""
+    etype = event.get("type", "")
+    message = event.get("message") or {}
+    role = message.get("role", "") if isinstance(message, dict) else ""
+    message_id = ""
+    if isinstance(message, dict):
+        message_id = message.get("id", "") or event.get("uuid", "")
+    else:
+        message_id = event.get("uuid", "")
+
+    content = _extract_event_content(event, message)
+    timestamp = _parse_timestamp(event.get("timestamp"))
+
+    return AssociatedEvent(
+        event_type=etype,
+        role=role,
+        message_id=message_id,
+        content=content,
+        timestamp=timestamp,
+    )
 
 
 def iter_session_gists(path: Path) -> Iterator[PromptGist]:
-    """Yield a PromptGist per typed prompt in one session transcript."""
+    """Yield a PromptGist per typed prompt in one session transcript.
+
+    Token usage lives only on ``assistant`` events, but a single assistant
+    message (one ``message.id``) is written across multiple JSONL lines
+    (thinking / text / tool_use), each repeating the *same* ``message.usage``.
+    We therefore accumulate usage at most once per ``message.id`` to avoid the
+    ~3x over-count that summing every line would produce. Assistant usage that
+    appears before any typed prompt (e.g. resumed/compacted sessions) is
+    attributed to a synthetic "session preamble" record so it is not dropped.
+    """
     project = decode_project_name(path.parent.name)
+    session_id = path.stem
     current: PromptGist | None = None
+    # message.id values whose usage we've already counted (dedupe split blocks).
+    counted_ids: set[str] = set()
+
+    def _preamble(event: dict) -> PromptGist:
+        gist = PromptGist(
+            timestamp=_parse_timestamp(event.get("timestamp")) or datetime.min,
+            project=project,
+            session_id=event.get("sessionId", session_id),
+            text="(session preamble — tokens before first prompt)",
+            event_type="assistant",
+            role="assistant",
+        )
+        gist.events.append(_make_associated_event(event))
+        return gist
 
     with path.open("r", encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -99,23 +187,53 @@ def iter_session_gists(path: Path) -> Iterator[PromptGist]:
                 if text is None or _is_command_noise(text):
                     # Not a real prompt (tool result, command noise); keep
                     # accumulating into the previous prompt if any.
+                    if current is not None:
+                        current.events.append(_make_associated_event(event))
                     continue
                 if current is not None:
                     yield current
                 current = PromptGist(
-                    timestamp=_parse_timestamp(event.get("timestamp"))
-                    or datetime.min,
+                    timestamp=_parse_timestamp(event.get("timestamp")) or datetime.min,
                     project=project,
-                    session_id=event.get("sessionId", path.stem),
+                    session_id=event.get("sessionId", session_id),
                     text=text,
+                    event_type=etype or "",
+                    role=message.get("role", "") if isinstance(message, dict) else "",
+                    message_id=message.get("id", "")
+                    if isinstance(message, dict)
+                    else "",
                 )
-            elif etype == "assistant" and current is not None:
+                current.events.append(_make_associated_event(event))
+            elif etype == "assistant":
+                if current is not None:
+                    current.events.append(_make_associated_event(event))
                 usage = message.get("usage")
-                if isinstance(usage, dict):
-                    current.usage.add(usage)
+                if not isinstance(usage, dict):
+                    continue
+                msg_id = message.get("id") or ""
+                # Count each assistant message's usage exactly once, even when
+                # its content blocks are split across several event lines.
+                if msg_id and msg_id in counted_ids:
+                    continue
+                if msg_id:
+                    counted_ids.add(msg_id)
+                if current is None:
+                    current = _preamble(event)
+                else:
+                    # Event already added above, but preamble creates a new gist
+                    # with the event already added
+                    pass
+                current.usage.add(usage)
                 model = message.get("model")
                 if model and not current.model:
                     current.model = model
+            else:
+                # Other events (system, attachment, etc.) - associate with current gist
+                # Skip sidechain user events entirely
+                if etype == "user" and event.get("isSidechain"):
+                    continue
+                if current is not None:
+                    current.events.append(_make_associated_event(event))
 
     if current is not None:
         yield current
@@ -126,11 +244,14 @@ def load_gists(
     *,
     project_filter: str | None = None,
     limit: int | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
 ) -> list[PromptGist]:
     """Load prompt gists across all sessions, newest first.
 
     ``project_filter`` is a case-insensitive substring matched against the
     decoded project label. ``limit`` caps the number of returned gists.
+    ``since`` and ``until`` filter by timestamp (inclusive).
     """
     projects_dir = projects_dir or default_projects_dir()
     if not projects_dir.exists():
@@ -149,6 +270,16 @@ def load_gists(
             continue
 
     gists.sort(key=lambda g: g.timestamp, reverse=True)
+
+    def _ensure_aware(dt: datetime) -> datetime:
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+    if since is not None:
+        since_aware = _ensure_aware(since)
+        gists = [g for g in gists if _ensure_aware(g.timestamp) >= since_aware]
+    if until is not None:
+        until_aware = _ensure_aware(until)
+        gists = [g for g in gists if _ensure_aware(g.timestamp) <= until_aware]
     if limit is not None:
         gists = gists[:limit]
     return gists

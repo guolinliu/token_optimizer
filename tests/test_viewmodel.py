@@ -26,7 +26,7 @@ def test_view_model_exposes_flat_rows_without_textual():
     assert rows[0].cost == "$0.0002"
     assert rows[0].model == "opus-4-8"
     assert rows[0].gist == "need textual>=1.1.3 and [E13 OK] done [user@host ~]$"
-    assert view_model.subtitle == "3 prompts · 880 tokens · flat"
+    assert view_model.subtitle.startswith("3 prompts · 880 tokens · flat")
 
 
 def test_view_model_exposes_grouped_and_collapsed_rows():
@@ -126,9 +126,7 @@ def test_view_model_sorts_prompts_by_cost_descending():
 
     rows = GistsViewModel(gists, sort_by_cost=True).table_rows()
     assert [row.gist for row in rows] == ["high", "low"]
-    assert GistsViewModel(gists, sort_by_cost=True).subtitle.endswith(
-        "flat · cost desc"
-    )
+    assert "flat · cost desc" in GistsViewModel(gists, sort_by_cost=True).subtitle
 
 
 def test_view_model_sorts_groups_by_cost_descending():

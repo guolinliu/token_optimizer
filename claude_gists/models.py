@@ -38,6 +38,17 @@ class TokenUsage:
 
 
 @dataclass
+class AssociatedEvent:
+    """A single event associated with a prompt gist."""
+
+    event_type: str = ""
+    role: str = ""
+    message_id: str = ""
+    content: str = ""
+    timestamp: datetime | None = None
+
+
+@dataclass
 class PromptGist:
     """One user prompt plus the token cost of the response it triggered."""
 
@@ -47,6 +58,10 @@ class PromptGist:
     text: str
     model: str = ""
     usage: TokenUsage = field(default_factory=TokenUsage)
+    event_type: str = ""
+    role: str = ""
+    message_id: str = ""
+    events: list[AssociatedEvent] = field(default_factory=list)
 
     @property
     def gist(self) -> str:
