@@ -46,6 +46,8 @@ class AssociatedEvent:
     message_id: str = ""
     content: str = ""
     timestamp: datetime | None = None
+    usage: TokenUsage | None = None
+    model: str = ""
 
 
 @dataclass

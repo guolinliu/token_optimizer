@@ -123,13 +123,25 @@ def _make_associated_event(event: dict) -> AssociatedEvent:
     message = event.get("message") or {}
     role = message.get("role", "") if isinstance(message, dict) else ""
     message_id = ""
+    model = ""
     if isinstance(message, dict):
         message_id = message.get("id", "") or event.get("uuid", "")
+        model = message.get("model", "") or ""
     else:
         message_id = event.get("uuid", "")
 
     content = _extract_event_content(event, message)
     timestamp = _parse_timestamp(event.get("timestamp"))
+
+    usage = None
+    if isinstance(message, dict):
+        usage_dict = message.get("usage")
+        if isinstance(usage_dict, dict):
+            u = TokenUsage()
+            u.add(usage_dict)
+            # Only store if there's actual usage
+            if u.total > 0:
+                usage = u
 
     return AssociatedEvent(
         event_type=etype,
@@ -137,6 +149,8 @@ def _make_associated_event(event: dict) -> AssociatedEvent:
         message_id=message_id,
         content=content,
         timestamp=timestamp,
+        usage=usage,
+        model=model,
     )
 
 

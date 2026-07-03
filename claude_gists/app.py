@@ -11,7 +11,7 @@ from textual.containers import Vertical, VerticalScroll
 from textual.widgets import DataTable, Footer, Header, Static
 
 from .history import load_gists
-from .models import PromptGist
+from .models import PromptGist, format_tokens
 from .viewmodel import (
     DetailView,
     EmptyDetailView,
@@ -285,17 +285,109 @@ class GistsApp(App):
         body.append("Cost", style="bold")
         body.append(view.cost_line + "\n\n")
 
-        # Display each associated event with its type, role, message id, and content
+        # Display each associated event with its type, role, and content.
+        # Token usage is shown on a newline below each row.
+        # Group assistant events by message_id to avoid duplicate token usage display.
+        from collections import defaultdict
+
+        # Group events by message_id for assistant role, keep others separate
+        grouped_events: dict[str, list] = defaultdict(list)
+        standalone_events = []
+
         for event in view.events:
+            if event.role == "assistant" and event.message_id:
+                grouped_events[event.message_id].append(event)
+            else:
+                standalone_events.append(event)
+
+        # Display standalone events first (user events, etc.)
+        for event in standalone_events:
             if event.event_type:
                 body.append(event.event_type, style="bold")
             if event.role:
                 body.append(f" ({event.role})", style="cyan")
-            if event.message_id:
-                body.append(f" [{event.message_id[:8]}]", style="dim")
             if event.content:
                 body.append(f"  {event.content}")
             body.append("\n")
+            if event.usage is not None:
+                usage_str = (
+                    f"  total={format_tokens(event.usage.total)}  "
+                    f"in={format_tokens(event.usage.input_tokens)}  "
+                    f"out={format_tokens(event.usage.output_tokens)}  "
+                    f"cache_w={format_tokens(event.usage.cache_creation_input_tokens)}  "
+                    f"cache_r={format_tokens(event.usage.cache_read_input_tokens)}"
+                )
+                body.append(usage_str, style="dim")
+                body.append("\n")
+
+        # Display grouped assistant events
+        for message_id, events in grouped_events.items():
+            if not events:
+                continue
+
+            # Use the first event for group header info
+            first = events[0]
+            # Get model from first event or fall back to view model
+            model = first.model or view.model
+            model_short = model.replace("claude-", "") if model else "—"
+
+            # Get usage from first event that has it (they should all be the same)
+            usage = None
+            for e in events:
+                if e.usage is not None:
+                    usage = e.usage
+                    break
+
+            # Header: role · message_id · model
+            if first.role:
+                body.append(first.role, style="bold")
+            if message_id:
+                # Shorten message_id for display (e.g., msg_vrtx_011JN -> msg_vrtx_011JN)
+                short_id = message_id[:20] if len(message_id) > 20 else message_id
+                body.append(f" · {short_id}", style="cyan")
+            if model_short:
+                body.append(f" · {model_short}")
+            body.append("\n")
+
+            # Show token usage on its own line, following existing display strategy
+            if usage is not None:
+                usage_str = (
+                    f"  total={format_tokens(usage.total)}  "
+                    f"in={format_tokens(usage.input_tokens)}  "
+                    f"out={format_tokens(usage.output_tokens)}  "
+                    f"cache_w={format_tokens(usage.cache_creation_input_tokens)}  "
+                    f"cache_r={format_tokens(usage.cache_read_input_tokens)}"
+                )
+                body.append(usage_str, style="dim")
+                body.append("\n")
+
+            # Display each event in the group as a tree branch
+            for i, event in enumerate(events):
+                is_last = i == len(events) - 1
+                branch = "     └ " if is_last else "     ├ "
+
+                body.append(branch, style="dim")
+
+                # Show event type (thinking, text, tool_use, etc.)
+                if event.event_type:
+                    body.append(event.event_type, style="bold")
+                else:
+                    body.append("event", style="bold")
+
+                # Show content preview
+                if event.content:
+                    # Truncate long content for preview
+                    content = event.content
+                    if len(content) > 60:
+                        content = content[:57] + "..."
+                    # Replace newlines with spaces for single-line preview
+                    content = " ".join(content.split())
+                    body.append(f'      "{content}"', style="dim")
+                elif event.event_type == "tool_use":
+                    # For tool_use without content, try to show tool name
+                    body.append("  ", style="dim")
+
+                body.append("\n")
 
         return body
 
