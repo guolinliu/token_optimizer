@@ -13,6 +13,8 @@ class TokenUsage:
     input_tokens: int = 0
     output_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    cache_creation_5m_input_tokens: int = 0
+    cache_creation_1h_input_tokens: int = 0
     cache_read_input_tokens: int = 0
 
     @property
@@ -35,6 +37,15 @@ class TokenUsage:
         self.cache_read_input_tokens += int(
             usage.get("cache_read_input_tokens", 0) or 0
         )
+        # Parse cache creation breakdown if available
+        cache_creation = usage.get("cache_creation", {})
+        if isinstance(cache_creation, dict):
+            self.cache_creation_5m_input_tokens += int(
+                cache_creation.get("ephemeral_5m_input_tokens", 0) or 0
+            )
+            self.cache_creation_1h_input_tokens += int(
+                cache_creation.get("ephemeral_1h_input_tokens", 0) or 0
+            )
 
 
 @dataclass

@@ -85,22 +85,61 @@ def _extract_event_content(event: dict, message: dict) -> str:
     # Try to get text from message.content
     content = message.get("content")
     text = _extract_user_text(content)
+
+    # Collect content types from blocks and tool names
+    # For tool_use blocks, the tool name should be displayed outside the brackets,
+    # just like text content is displayed outside the (text) type.
+    content_types = []
+    tool_names = []
+    if isinstance(content, list):
+        for blk in content:
+            if not isinstance(blk, dict):
+                continue
+            btype = blk.get("type", "")
+            if not btype:
+                continue
+            content_types.append(btype)
+            if btype == "tool_use":
+                name = blk.get("name", "")
+                if name == "Skill":
+                    skill = blk.get("input", {}).get("skill", "")
+                    if skill:
+                        tool_names.append(f"Skill:{skill}")
+                    else:
+                        tool_names.append("Skill")
+                elif name:
+                    tool_names.append(name)
+
+    types_str = f"({', '.join(content_types)})" if content_types else ""
+
+    # Build the content string: text followed by tool names
+    content_parts = []
     if text:
         # Truncate long text
         if len(text) > 200:
-            return text[:197] + "..."
-        return text
+            text = text[:197] + "..."
+        content_parts.append(text)
+    if tool_names:
+        content_parts.extend(tool_names)
 
-    # For assistant events with no text content, show model info
+    content_str = " ".join(content_parts)
+
+    if content_str:
+        if types_str:
+            return f"{types_str} {content_str}"
+        return content_str
+
+    # For assistant events with no text content, show types
     if etype == "assistant":
-        model = message.get("model", "")
-        if model:
-            return f"[assistant: {model}]"
-        return "[assistant]"
+        if types_str:
+            return types_str
+        return "(assistant)"
 
     # For user events with tool results (content is list without text blocks)
     if etype == "user" and isinstance(content, list):
-        return "[tool result]"
+        if types_str:
+            return types_str
+        return "(tool result)"
 
     # For other events, show type and maybe a summary
     if etype == "attachment":
@@ -108,11 +147,13 @@ def _extract_event_content(event: dict, message: dict) -> str:
         if isinstance(attachment, dict):
             atype = attachment.get("type", "")
             if atype:
-                return f"[attachment: {atype}]"
-        return "[attachment]"
+                return f"(attachment: {atype})"
+        return "(attachment)"
 
     if etype:
-        return f"[{etype}]"
+        if types_str:
+            return f"({etype} | {types_str})"
+        return f"({etype})"
 
     return ""
 

@@ -1,8 +1,8 @@
 """Claude API token cost estimation.
 
 Rates are public Claude API prices in USD per million tokens. Local Claude Code
-history records cache creation tokens, but not the selected cache TTL, so cache
-writes are estimated with the 5-minute prompt-cache write rate.
+history records cache creation tokens with breakdown by TTL (5-minute vs 1-hour
+ephemeral cache), so we use the appropriate rate for each.
 """
 
 from __future__ import annotations
@@ -16,19 +16,20 @@ from .models import TokenUsage
 class ClaudeRates:
     input: float
     output: float
-    cache_write_5min: float
+    cache_write_5m: float
+    cache_write_1h: float
     cache_read: float
 
 
 RATES_BY_MODEL: dict[str, ClaudeRates] = {
-    "claude-opus-4-8": ClaudeRates(5.00, 25.00, 6.25, 0.50),
-    "claude-opus-4-7": ClaudeRates(5.00, 25.00, 6.25, 0.50),
-    "claude-opus-4-6": ClaudeRates(5.00, 25.00, 6.25, 0.50),
-    "claude-sonnet-4-6": ClaudeRates(3.00, 15.00, 3.75, 0.30),
-    "claude-sonnet-4-5": ClaudeRates(3.00, 15.00, 3.75, 0.30),
-    "claude-haiku-4-5": ClaudeRates(1.00, 5.00, 1.25, 0.10),
-    "claude-haiku-4-5-20251001": ClaudeRates(1.00, 5.00, 1.25, 0.10),
-    "claude-haiku-3-5": ClaudeRates(0.80, 4.00, 1.00, 0.08),
+    "claude-opus-4-8": ClaudeRates(5.00, 25.00, 6.25, 10.00, 0.50),
+    "claude-opus-4-7": ClaudeRates(5.00, 25.00, 6.25, 10.00, 0.50),
+    "claude-opus-4-6": ClaudeRates(5.00, 25.00, 6.25, 10.00, 0.50),
+    "claude-sonnet-4-6": ClaudeRates(3.00, 15.00, 3.75, 6.00, 0.30),
+    "claude-sonnet-4-5": ClaudeRates(3.00, 15.00, 3.75, 6.00, 0.30),
+    "claude-haiku-4-5": ClaudeRates(1.00, 5.00, 1.25, 2.00, 0.10),
+    "claude-haiku-4-5-20251001": ClaudeRates(1.00, 5.00, 1.25, 2.00, 0.10),
+    "claude-haiku-3-5": ClaudeRates(0.80, 4.00, 1.00, 1.60, 0.08),
 }
 
 
@@ -59,10 +60,20 @@ def estimate_cost_usd(
     if rates is None:
         return None
 
+    # Use breakdown if available, otherwise fall back to the total with 5m rate
+    # (for backward compatibility with old data that doesn't have the breakdown)
+    if usage.cache_creation_5m_input_tokens or usage.cache_creation_1h_input_tokens:
+        cache_5m_cost = usage.cache_creation_5m_input_tokens * rates.cache_write_5m
+        cache_1h_cost = usage.cache_creation_1h_input_tokens * rates.cache_write_1h
+        cache_cost = cache_5m_cost + cache_1h_cost
+    else:
+        # Old data without breakdown - assume 5m rate as before
+        cache_cost = usage.cache_creation_input_tokens * rates.cache_write_5m
+
     return (
         usage.input_tokens * rates.input
         + usage.output_tokens * rates.output
-        + usage.cache_creation_input_tokens * rates.cache_write_5min
+        + cache_cost
         + usage.cache_read_input_tokens * rates.cache_read
     ) / 1_000_000
 
