@@ -69,6 +69,7 @@ class PromptGist:
     project: str
     session_id: str
     text: str
+    uuid: str = ""
     model: str = ""
     usage: TokenUsage = field(default_factory=TokenUsage)
     event_type: str = ""
