@@ -61,7 +61,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--group",
         action="store_true",
-        help="Start in grouped-by-project view (toggle with 'g' in the TUI).",
+        default=True,
+        help="Start in grouped-by-project view (toggle with 'g' in the TUI). Enabled by default.",
+    )
+    parser.add_argument(
+        "--no-group",
+        dest="group",
+        action="store_false",
+        help="Start in flat view instead of grouped-by-project view.",
+    )
+    parser.add_argument(
+        "--flat",
+        dest="group",
+        action="store_false",
+        help="Alias for --no-group.",
     )
     parser.add_argument(
         "--list",

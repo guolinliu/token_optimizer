@@ -92,6 +92,8 @@ class GroupDetailView:
     average_tokens: str
     usage_line: str
     cost_line: str
+    prompts: list[tuple[str, str]] = field(default_factory=list)
+    # Each prompt is (time_str, gist_preview), with time in "MM-DD HH:MM" format.
 
 
 @dataclass(frozen=True)
@@ -233,12 +235,17 @@ class GistsViewModel:
         for group in groups:
             collapsed = group.project in self.collapsed
             marker = "▶" if collapsed else "▼"
-            count = f"{group.count} prompts" + (" (folded)" if collapsed else "")
+            count = f"{group.count} prompts"
+            # Time column shows the time of the latest prompt in the group.
+            latest_time = ""
+            if group.gists:
+                latest_gist = max(group.gists, key=lambda g: g.timestamp)
+                latest_time = to_local(latest_gist.timestamp).strftime("%m-%d %H:%M")
             rows.append(
                 TableRowView(
                     kind="header",
                     project=group.project,
-                    time="",
+                    time=latest_time,
                     project_label=f"{marker} {short_project(group.project)}",
                     tokens=format_tokens(group.usage.total),
                     cost=format_cost(group.cost_usd),
@@ -338,6 +345,11 @@ class GistsViewModel:
             newest = to_local(group.gists[0].timestamp).strftime("%Y-%m-%d %H:%M")
             oldest = to_local(group.gists[-1].timestamp).strftime("%Y-%m-%d %H:%M")
         avg = group.usage.total // group.count if group.count else 0
+        # Build list of included user prompts with time in front.
+        prompts = []
+        for g in group.gists:
+            t = to_local(g.timestamp).strftime("%m-%d %H:%M")
+            prompts.append((t, g.gist_preview(80)))
         return GroupDetailView(
             kind="header",
             project=group.project,
@@ -347,6 +359,7 @@ class GistsViewModel:
             average_tokens=format_tokens(avg),
             usage_line=usage_line(group.usage),
             cost_line=f"  estimated={format_cost(group.cost_usd)}",
+            prompts=prompts,
         )
 
 

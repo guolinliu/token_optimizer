@@ -80,6 +80,8 @@ class GistsApp(App):
         self._rows: list[RowEntry] = []
         # Projects whose prompt rows are currently folded away (grouped view).
         self._collapsed: set[str] = set()
+        # Whether we've applied the default "expand only first group" state.
+        self._default_collapse_applied = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -90,19 +92,6 @@ class GistsApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        table = self.query_one("#table", DataTable)
-        table.add_columns(
-            "Time",
-            "Project",
-            "Tokens",
-            "Cost",
-            "In",
-            "Out",
-            "CacheW",
-            "CacheR",
-            "Model",
-            "Gist",
-        )
         self.action_reload()
 
     # ------------------------------------------------------------------ actions
@@ -191,9 +180,87 @@ class GistsApp(App):
 
     def _populate(self, focus_project: str | None = None) -> None:
         table = self.query_one("#table", DataTable)
-        table.clear()
+        # By default, expand only the first group and collapse the rest.
+        if self._grouped and not self._default_collapse_applied:
+            ordered_projects = [g.project for g in group_by_project(self._gists)]
+            if self._sort_by_cost:
+                # Reorder by cost descending to match the view model's sorting.
+                groups = group_by_project(self._gists)
+                from .viewmodel import cost_sort_key
+                from .pricing import estimate_cost_usd
+                from .viewmodel import pricing_models_by_project
+
+                project_pricing = pricing_models_by_project(self._gists)
+
+                def _group_cost(g):
+                    costs = [
+                        estimate_cost_usd(
+                            p.model,
+                            p.usage,
+                            fallback_model=project_pricing.get(p.project),
+                        )
+                        for p in g.gists
+                    ]
+                    total = None if any(c is None for c in costs) else sum(costs)
+                    return cost_sort_key(total)
+
+                groups = sorted(groups, key=_group_cost)
+                ordered_projects = [g.project for g in groups]
+            if ordered_projects:
+                first, *rest = ordered_projects
+                self._collapsed = set(rest)
+            self._default_collapse_applied = True
         view_model = self._view_model()
         rows = view_model.table_rows()
+        # Compute dynamic target width for the Gist column in grouped view
+        # so the prompt count stays right-aligned even when gists are long.
+        if self._grouped:
+            max_gist_len = 0
+            for r in rows:
+                if r.is_header:
+                    max_gist_len = max(max_gist_len, len(r.project_label))
+                else:
+                    max_gist_len = max(max_gist_len, len(r.gist))
+            # Add room for the count string (e.g. "123 prompts") and padding.
+            # Use at least 50 chars, or the max content length plus 15.
+            self._gist_column_target_width = max(50, max_gist_len + 15)
+        else:
+            self._gist_column_target_width = 50
+        # Clear table and re-add columns. In grouped view, set a fixed width
+        # for the Gist column to prevent it from shrinking when headers scroll
+        # out of view (DataTable may recalculate widths based on visible rows).
+        # Using a fixed width ensures the column stays wide enough for the
+        # padded header content even when only prompt rows are visible.
+        table.clear(columns=True)
+        if self._grouped:
+            # In grouped view, Project column is renamed to Gist and Gist column removed.
+            # Set width on the Gist column to keep it wide enough for the
+            # padded header content even when only prompt rows are visible.
+            # Use the dynamic target width, but ensure a minimum of 80 chars.
+            # Also set a fixed width for the Time column to prevent truncation;
+            # time strings are "MM-DD HH:MM" (11 chars), so 12 chars is sufficient.
+            gist_width = max(80, self._gist_column_target_width)
+            table.add_column("Time", width=12)
+            table.add_column("Gist", width=gist_width)
+            table.add_column("Tokens")
+            table.add_column("Cost")
+            table.add_column("In")
+            table.add_column("Out")
+            table.add_column("CacheW")
+            table.add_column("CacheR")
+            table.add_column("Model")
+        else:
+            # Flat view: set Time column width to prevent truncation.
+            table.add_column("Time", width=12)
+            table.add_column("Project")
+            table.add_column("Tokens")
+            table.add_column("Cost")
+            table.add_column("In")
+            table.add_column("Out")
+            table.add_column("CacheW")
+            table.add_column("CacheR")
+            table.add_column("Model")
+            table.add_column("Gist")
         self._rows = [(row.kind, row.entry) for row in rows]
         for index, row in enumerate(rows):
             self._add_table_row(table, row, index=index)
@@ -235,19 +302,75 @@ class GistsApp(App):
             cache_read_tokens = row.cache_read_tokens
             gist = Text(row.gist)
 
-        table.add_row(
-            row.time,
-            project,
-            tokens,
-            cost,
-            input_tokens,
-            output_tokens,
-            cache_write_tokens,
-            cache_read_tokens,
-            row.model,
-            gist,
-            key=str(index),
-        )
+        if self._grouped:
+            # In grouped view, the Project column is renamed to Gist and the Gist
+            # column is removed. Header rows keep the group name in the Gist column;
+            # prompt rows show the gist preview in the Gist column.
+            if row.is_header:
+                # row.project_label contains the group name on the first line,
+                # followed by the included prompts with times on subsequent lines.
+                # Split into first line (group name) and rest (prompts).
+                lines = row.project_label.split("\n")
+                first_line = lines[0] if lines else ""
+                rest_lines = lines[1:] if len(lines) > 1 else []
+                # Create the project Text with only the first line bold.
+                project = Text(first_line, style="bold")
+                # Put the prompt count to the right of the first line, right-aligned
+                # within the Gist column. We pad with spaces to push the count
+                # to the far right while keeping the group name left-aligned.
+                count_text = row.gist or ""
+                target_width = getattr(self, "_gist_column_target_width", 50)
+                group_len = len(first_line)
+                count_len = len(count_text)
+                spaces_needed = max(2, target_width - group_len - count_len)
+                project.append(" " * spaces_needed)
+                project.append(count_text, style="italic dim")
+                # Append the included prompts (with time in front) below the group name.
+                if rest_lines:
+                    project.append("\n")
+                    project.append("\n".join(rest_lines))
+            else:
+                # row.gist contains the indented gist preview ("  " + preview);
+                # keep the indent so it's visually under the project header.
+                if isinstance(gist, Text):
+                    gist_text = gist.plain
+                else:
+                    gist_text = row.gist if isinstance(row.gist, str) else ""
+                project = Text(gist_text)
+                # Pad prompt rows to the target width as well, so the Gist column
+                # stays wide even when headers scroll out of view. This prevents
+                # columns from narrowing when hovering over prompt rows after
+                # expanding a group by clicking (which may move the cursor and
+                # scroll the header out of view).
+                target_width = getattr(self, "_gist_column_target_width", 50)
+                if len(gist_text) < target_width:
+                    project.append(" " * (target_width - len(gist_text)))
+            table.add_row(
+                row.time,
+                project,
+                tokens,
+                cost,
+                input_tokens,
+                output_tokens,
+                cache_write_tokens,
+                cache_read_tokens,
+                row.model,
+                key=str(index),
+            )
+        else:
+            table.add_row(
+                row.time,
+                project,
+                tokens,
+                cost,
+                input_tokens,
+                output_tokens,
+                cache_write_tokens,
+                cache_read_tokens,
+                row.model,
+                gist,
+                key=str(index),
+            )
 
     # ------------------------------------------------------------------ detail
 
@@ -402,6 +525,15 @@ class GistsApp(App):
         body.append(view.usage_line + "\n")
         body.append("Cost", style="bold")
         body.append(view.cost_line)
+        # Display included user prompts with time in front.
+        if view.prompts:
+            body.append("\n\n")
+            body.append("Prompts", style="bold")
+            body.append("\n")
+            for time_str, gist in view.prompts:
+                body.append(f"{time_str}  ", style="dim")
+                body.append(gist)
+                body.append("\n")
         return body
 
 

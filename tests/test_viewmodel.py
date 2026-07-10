@@ -44,7 +44,7 @@ def test_view_model_exposes_grouped_and_collapsed_rows():
     assert rows[0].project_label == "▶ sample-project"
     assert rows[0].tokens == "880"
     assert rows[0].cost == "$0.0074"
-    assert rows[0].gist == "3 prompts (folded)"
+    assert rows[0].gist == "3 prompts"
     assert view_model.project_at_row(0) == "sample-project"
 
 
