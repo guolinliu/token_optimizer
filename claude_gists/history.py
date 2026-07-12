@@ -133,6 +133,18 @@ def _attachment_detail(atype: str, a: dict) -> str:
             detail = f"{detail} error".strip()
         elif atype == "hook_cancelled" and a.get("timedOut"):
             detail = f"{detail} timeout".strip()
+        # Add success/fail icon based on exit code or type
+        if atype == "hook_success":
+            exit_code = a.get("exitCode")
+            if exit_code == 0:
+                detail = f"{detail} ✓".strip()
+            elif exit_code is not None:
+                detail = f"{detail} ✗".strip()
+            else:
+                # No exit code, assume success for hook_success type
+                detail = f"{detail} ✓".strip()
+        elif atype in ("hook_non_blocking_error", "hook_cancelled"):
+            detail = f"{detail} ✗".strip()
         return detail
     if atype == "task_reminder":
         n = a.get("itemCount")
@@ -195,6 +207,8 @@ def _record_tool_names(event: dict, tool_name_map: dict[str, str]) -> None:
 
     Populated as we scan the transcript so a later user ``tool_result`` (which
     only carries ``tool_use_id``) can be labeled with the tool that produced it.
+    The description from the tool input is also included, so the tool_result
+    can display the original command/description.
     """
     message = event.get("message")
     if not isinstance(message, dict):
@@ -207,8 +221,37 @@ def _record_tool_names(event: dict, tool_name_map: dict[str, str]) -> None:
             continue
         tid = blk.get("id")
         name = blk.get("name")
-        if tid and name:
-            tool_name_map[tid] = name
+        if not tid:
+            continue
+        # Extract description from tool input for display in tool_result
+        desc = ""
+        if isinstance(blk.get("input"), dict):
+            desc = (
+                blk["input"].get("description", "")
+                or blk["input"].get("command", "")
+                or blk["input"].get("query", "")
+                or blk["input"].get("pattern", "")
+                or blk["input"].get("path", "")
+            )
+        if name == "Skill":
+            skill = blk.get("input", {}).get("skill", "")
+            if skill:
+                label = f"Skill:{skill}"
+            else:
+                label = "Skill"
+        elif name:
+            label = name
+        else:
+            label = ""
+        if desc:
+            if len(desc) > 100:
+                desc = desc[:97] + "..."
+            if label:
+                label = f"{label}: {desc}"
+            else:
+                label = desc
+        if label:
+            tool_name_map[tid] = label
 
 
 def _extract_event_content(
@@ -246,24 +289,48 @@ def _extract_event_content(
             content_types.append(btype)
             if btype == "tool_use":
                 name = blk.get("name", "")
+                desc = ""
+                if isinstance(blk.get("input"), dict):
+                    desc = (
+                        blk["input"].get("description", "")
+                        or blk["input"].get("command", "")
+                        or blk["input"].get("query", "")
+                        or blk["input"].get("pattern", "")
+                        or blk["input"].get("path", "")
+                    )
                 if name == "Skill":
                     skill = blk.get("input", {}).get("skill", "")
                     if skill:
-                        tool_names.append(f"Skill:{skill}")
+                        label = f"Skill:{skill}"
                     else:
-                        tool_names.append("Skill")
+                        label = "Skill"
                 elif name:
-                    tool_names.append(name)
+                    label = name
+                else:
+                    label = ""
+                if desc:
+                    # Truncate long descriptions to keep the content readable
+                    if len(desc) > 100:
+                        desc = desc[:97] + "..."
+                    if label:
+                        label = f"{label}: {desc}"
+                    else:
+                        label = desc
+                if label:
+                    tool_names.append(label)
             elif btype == "tool_result":
-                # Resolve which tool produced this result and flag failures, so
-                # "(tool_result)" becomes e.g. "(tool_result) Bash ✗ app.py".
+                # Resolve which tool produced this result and flag success/failure.
+                # The description is already shown in the tool_use, so the tool_result
+                # just displays the tool name with a success/fail icon, without
+                # repeating the description or output details.
                 resolved = (tool_name_map or {}).get(blk.get("tool_use_id", ""), "")
-                label = resolved or "tool"
+                # Extract just the tool name without the description (e.g., "Bash" from "Bash: ls -la")
+                tool_name = resolved.split(":")[0] if ":" in resolved else resolved
+                label = tool_name or "tool"
                 if blk.get("is_error"):
                     label += " ✗"
-                detail = _tool_result_detail(event.get("toolUseResult"))
-                if detail:
-                    label += f" {detail}"
+                else:
+                    label += " ✓"
                 tool_names.append(label)
 
     types_str = f"({', '.join(content_types)})" if content_types else ""
@@ -334,6 +401,31 @@ def _make_associated_event(
             if u.total > 0:
                 usage = u
 
+    # Extract tool_use_ids for linking tool_use with tool_result and hooks
+    tool_use_ids = []
+    if isinstance(message, dict):
+        content_blocks = message.get("content")
+        if isinstance(content_blocks, list):
+            for blk in content_blocks:
+                if not isinstance(blk, dict):
+                    continue
+                btype = blk.get("type", "")
+                if btype == "tool_use":
+                    tid = blk.get("id", "")
+                    if tid:
+                        tool_use_ids.append(tid)
+                elif btype == "tool_result":
+                    tid = blk.get("tool_use_id", "")
+                    if tid:
+                        tool_use_ids.append(tid)
+    # Also check for hook_success attachments which have a toolUseID field
+    if etype == "attachment":
+        attachment = event.get("attachment", {})
+        if isinstance(attachment, dict) and attachment.get("type") == "hook_success":
+            tid = attachment.get("toolUseID", "")
+            if tid:
+                tool_use_ids.append(tid)
+
     return AssociatedEvent(
         event_type=etype,
         role=role,
@@ -342,6 +434,7 @@ def _make_associated_event(
         timestamp=timestamp,
         usage=usage,
         model=model,
+        tool_use_ids=tool_use_ids,
     )
 
 

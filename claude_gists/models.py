@@ -59,6 +59,9 @@ class AssociatedEvent:
     timestamp: datetime | None = None
     usage: TokenUsage | None = None
     model: str = ""
+    tool_use_ids: list[str] = field(default_factory=list)
+    # For tool_use blocks, the ids of the tools invoked.
+    # For tool_result blocks, the tool_use_ids they reference.
 
 
 @dataclass

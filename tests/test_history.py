@@ -147,7 +147,9 @@ def test_tool_result_events_named_by_tool_and_error(tmp_path):
     tool_results = _content_by_type(gists[0], "user")
     # The typed prompt itself is a "user" event too; keep only tool_result rows.
     tool_results = [c for c in tool_results if c.startswith("(tool_result)")]
-    assert "(tool_result) Edit app.py" in tool_results
+    # Tool results now display just the tool name with success/fail icon,
+    # without repeating the description or output details.
+    assert "(tool_result) Edit ✓" in tool_results
     assert "(tool_result) Bash ✗" in tool_results
 
 
@@ -214,7 +216,7 @@ def test_attachment_events_show_type_and_brief_detail(tmp_path):
     gists = load_gists(tmp_path)
     assert len(gists) == 1
     attachments = _content_by_type(gists[0], "attachment")
-    assert "(hook_success) PreToolUse:Bash 83ms" in attachments
+    assert "(hook_success) PreToolUse:Bash 83ms ✓" in attachments
     assert "(skill_listing) 14 skills" in attachments
     assert "(edited_text_file) notes.md" in attachments
     # Unknown subtypes degrade to just the type label.

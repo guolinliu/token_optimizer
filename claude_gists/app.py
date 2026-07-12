@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 from rich.text import Text
@@ -393,124 +395,194 @@ class GistsApp(App):
         return self._prompt_detail_text(view)
 
     def _prompt_detail_text(self, view: PromptDetailView) -> Text:
-        # Build a Rich Text rather than a markup string: styles are attached as
-        # spans, so the prompt body (which may contain "[" / "]") is rendered
-        # verbatim instead of being parsed as Textual console markup.
         body = Text()
         body.append(view.when, style="bold")
-        body.append("  ·  ")
+        body.append(" · ")
         body.append(view.project, style="cyan")
-        body.append("  ·  ")
+        body.append(" · ")
         body.append(view.model)
-        body.append(f"  ·  session {view.session_id}\n")
+        body.append(" · session ")
+        body.append(view.session_id, style="cyan")
+        body.append("\n")
         body.append("Tokens", style="bold")
         body.append(view.usage_line + "\n")
         body.append("Cost", style="bold")
         body.append(view.cost_line + "\n\n")
 
-        # Display each associated event with its type, role, and content.
-        # Token usage is shown on a newline below each row.
-        # Group assistant events by message_id to avoid duplicate token usage display.
-        from collections import defaultdict
+        body.append("events:\n\n")
 
-        # Group events by message_id for assistant role, keep others separate
-        grouped_events: dict[str, list] = defaultdict(list)
-        standalone_events = []
-
+        # Build map from tool_use_id to tool_result event and hook events for linking
+        tool_result_map: dict[str, AssociatedEvent] = {}
+        hook_map: dict[str, list[AssociatedEvent]] = defaultdict(list)
         for event in view.events:
-            if event.role == "assistant" and event.message_id:
+            if event.tool_use_ids:
+                if event.role == "user" and "tool_result" in event.content:
+                    for tid in event.tool_use_ids:
+                        tool_result_map[tid] = event
+                elif (
+                    event.event_type == "attachment" and "hook_success" in event.content
+                ):
+                    for tid in event.tool_use_ids:
+                        hook_map[tid].append(event)
+
+        # Group assistant events by message_id for collapsible display
+        grouped_events: dict[str, list[AssociatedEvent]] = defaultdict(list)
+        for event in view.events:
+            if event.role == "assistant":
                 grouped_events[event.message_id].append(event)
+
+        emitted_groups: set[str] = set()
+        rendered_tool_results: set[str] = set()
+        rendered_hooks: set[int] = set()  # Use id(event) to track rendered hooks
+
+        # Iterate events in chronological order, rendering groups and standalone
+        # events as they appear in the transcript.
+        for event in view.events:
+            if event.role == "assistant":
+                if event.message_id in emitted_groups:
+                    continue
+                group = grouped_events[event.message_id]
+                if not group:
+                    continue
+
+                # Use the first event for group header info
+                first = group[0]
+                model = first.model or view.model
+                model_short = model.replace("claude-", "") if model else "—"
+
+                usage = None
+                for e in group:
+                    if e.usage is not None:
+                        usage = e.usage
+                        break
+
+                # Header: role · message_id · model
+                if first.role:
+                    body.append(first.role, style="bold")
+                if event.message_id:
+                    short_id = (
+                        event.message_id[:20]
+                        if len(event.message_id) > 20
+                        else event.message_id
+                    )
+                    body.append(f" · {short_id}", style="cyan")
+                if model_short:
+                    body.append(f" · {model_short}")
+                body.append("\n")
+
+                if usage is not None:
+                    usage_str = (
+                        f"  total={format_tokens(usage.total)}  "
+                        f"in={format_tokens(usage.input_tokens)}  "
+                        f"out={format_tokens(usage.output_tokens)}  "
+                        f"cache_w={format_tokens(usage.cache_creation_input_tokens)}  "
+                        f"cache_r={format_tokens(usage.cache_read_input_tokens)}"
+                    )
+                    body.append(usage_str, style="dim")
+                    body.append("\n")
+
+                # Display each event in the group as a tree branch
+                for i, evt in enumerate(group):
+                    is_last = i == len(group) - 1
+                    branch = "     └ " if is_last else "     ├ "
+
+                    body.append(branch, style="dim")
+
+                    if evt.event_type:
+                        body.append(evt.event_type, style="bold")
+                    else:
+                        body.append("event", style="bold")
+
+                    if evt.content:
+                        content = evt.content
+                        if len(content) > 60:
+                            content = content[:57] + "..."
+                        content = " ".join(content.split())
+                        body.append(f'      "{content}"', style="dim")
+                    elif evt.event_type == "tool_use":
+                        body.append("  ", style="dim")
+
+                    body.append("\n")
+
+                    # Display corresponding tool_result and hooks right below the tool_use
+                    # with another indent level, linking them visually.
+                    for tid in evt.tool_use_ids:
+                        # Collect children: hooks and tool_result for this tool_use_id
+                        children = []
+                        if tid in hook_map:
+                            for hook_event in hook_map[tid]:
+                                if id(hook_event) not in rendered_hooks:
+                                    children.append(("hook", hook_event))
+                        if tid in tool_result_map and tid not in rendered_tool_results:
+                            children.append(("result", tool_result_map[tid]))
+                        # Sort children by timestamp to maintain chronological order
+                        children.sort(
+                            key=lambda x: (
+                                x[1].timestamp
+                                or datetime.min.replace(tzinfo=timezone.utc)
+                            )
+                        )
+                        for j, (child_type, child_event) in enumerate(children):
+                            is_last_child = j == len(children) - 1
+                            # Extra indent: 9 spaces + branch, e.g., "         └ "
+                            child_branch = (
+                                "         └ " if is_last_child else "         ├ "
+                            )
+                            body.append(child_branch, style="dim")
+                            if child_type == "result":
+                                # Tool result: "user  \"(tool_result)...\""
+                                body.append("user", style="bold")
+                                if child_event.content:
+                                    content = child_event.content
+                                    if len(content) > 60:
+                                        content = content[:57] + "..."
+                                    content = " ".join(content.split())
+                                    body.append(f'  "{content}"', style="dim")
+                                body.append("\n")
+                                rendered_tool_results.add(tid)
+                            else:  # hook
+                                # Hook attachment: "attachment  \"(hook_success)...\""
+                                if child_event.event_type:
+                                    body.append(child_event.event_type, style="bold")
+                                if child_event.content:
+                                    content = child_event.content
+                                    if len(content) > 60:
+                                        content = content[:57] + "..."
+                                    content = " ".join(content.split())
+                                    body.append(f'  "{content}"', style="dim")
+                                body.append("\n")
+                                rendered_hooks.add(id(child_event))
+
+                emitted_groups.add(event.message_id)
             else:
-                standalone_events.append(event)
-
-        # Display standalone events first (user events, etc.)
-        for event in standalone_events:
-            if event.event_type:
-                body.append(event.event_type, style="bold")
-            if event.role:
-                body.append(f" ({event.role})", style="cyan")
-            if event.content:
-                body.append(f"  {event.content}")
-            body.append("\n")
-            if event.usage is not None:
-                usage_str = (
-                    f"  total={format_tokens(event.usage.total)}  "
-                    f"in={format_tokens(event.usage.input_tokens)}  "
-                    f"out={format_tokens(event.usage.output_tokens)}  "
-                    f"cache_w={format_tokens(event.usage.cache_creation_input_tokens)}  "
-                    f"cache_r={format_tokens(event.usage.cache_read_input_tokens)}"
-                )
-                body.append(usage_str, style="dim")
-                body.append("\n")
-
-        # Display grouped assistant events
-        for message_id, events in grouped_events.items():
-            if not events:
-                continue
-
-            # Use the first event for group header info
-            first = events[0]
-            # Get model from first event or fall back to view model
-            model = first.model or view.model
-            model_short = model.replace("claude-", "") if model else "—"
-
-            # Get usage from first event that has it (they should all be the same)
-            usage = None
-            for e in events:
-                if e.usage is not None:
-                    usage = e.usage
-                    break
-
-            # Header: role · message_id · model
-            if first.role:
-                body.append(first.role, style="bold")
-            if message_id:
-                # Shorten message_id for display (e.g., msg_vrtx_011JN -> msg_vrtx_011JN)
-                short_id = message_id[:20] if len(message_id) > 20 else message_id
-                body.append(f" · {short_id}", style="cyan")
-            if model_short:
-                body.append(f" · {model_short}")
-            body.append("\n")
-
-            # Show token usage on its own line, following existing display strategy
-            if usage is not None:
-                usage_str = (
-                    f"  total={format_tokens(usage.total)}  "
-                    f"in={format_tokens(usage.input_tokens)}  "
-                    f"out={format_tokens(usage.output_tokens)}  "
-                    f"cache_w={format_tokens(usage.cache_creation_input_tokens)}  "
-                    f"cache_r={format_tokens(usage.cache_read_input_tokens)}"
-                )
-                body.append(usage_str, style="dim")
-                body.append("\n")
-
-            # Display each event in the group as a tree branch
-            for i, event in enumerate(events):
-                is_last = i == len(events) - 1
-                branch = "     └ " if is_last else "     ├ "
-
-                body.append(branch, style="dim")
-
-                # Show event type (thinking, text, tool_use, etc.)
+                # Skip tool_result events and hooks that were already rendered under their tool_use
+                if event.role == "user" and event.tool_use_ids:
+                    if "tool_result" in event.content:
+                        if any(
+                            tid in rendered_tool_results for tid in event.tool_use_ids
+                        ):
+                            continue
+                if event.event_type == "attachment" and "hook_success" in event.content:
+                    if id(event) in rendered_hooks:
+                        continue
+                # Display standalone events (user prompts, attachments, unlinked tool_results/hooks)
                 if event.event_type:
                     body.append(event.event_type, style="bold")
-                else:
-                    body.append("event", style="bold")
-
-                # Show content preview
+                if event.role:
+                    body.append(f" ({event.role})", style="cyan")
                 if event.content:
-                    # Truncate long content for preview
-                    content = event.content
-                    if len(content) > 60:
-                        content = content[:57] + "..."
-                    # Replace newlines with spaces for single-line preview
-                    content = " ".join(content.split())
-                    body.append(f'      "{content}"', style="dim")
-                elif event.event_type == "tool_use":
-                    # For tool_use without content, try to show tool name
-                    body.append("  ", style="dim")
-
+                    body.append(f"  {event.content}")
                 body.append("\n")
+                if event.usage is not None:
+                    usage_str = (
+                        f"  total={format_tokens(event.usage.total)}  "
+                        f"in={format_tokens(event.usage.input_tokens)}  "
+                        f"out={format_tokens(event.usage.output_tokens)}  "
+                        f"cache_w={format_tokens(event.usage.cache_creation_input_tokens)}  "
+                        f"cache_r={format_tokens(event.usage.cache_read_input_tokens)}"
+                    )
+                    body.append(usage_str, style="dim")
+                    body.append("\n")
 
         return body
 
